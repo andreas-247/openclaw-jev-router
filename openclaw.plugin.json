@@ -1,6 +1,6 @@
 {
   "id": "jarvis-codex-router",
-  "name": "Axeon JEV Router",
+  "name": "OpenClaw JEV Router for Codex",
   "description": "Owner-controlled per-chat JEV model routing; no thinking overrides or dispatch takeover",
   "enabledByDefault": false,
   "activation": {
@@ -18,7 +18,7 @@
       }
     }
   },
-  "version": "0.2.3",
+  "version": "0.2.4",
   "categories": [
     "developer-tools"
   ]

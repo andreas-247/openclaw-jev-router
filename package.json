@@ -1,9 +1,9 @@
 {
-  "name": "@axeon-at/openclaw-jev-router",
-  "version": "0.2.3",
+  "name": "@andreas-247/openclaw-jev-router",
+  "version": "0.2.4",
   "private": false,
   "type": "module",
-  "description": "JEV model-only routing for OpenClaw; host thinking and delivery unchanged",
+  "description": "JEV model-only routing for OpenClaw Codex/OpenAI models; host thinking and delivery unchanged",
   "openclaw": {
     "extensions": [
       "./index.mjs"
@@ -20,14 +20,14 @@
     "preview": "node cli.mjs"
   },
   "license": "MIT",
-  "author": "Axeon",
-  "homepage": "https://github.com/axeon-at/openclaw-jev-router#readme",
+  "author": "Andreas (andreas-247)",
+  "homepage": "https://github.com/andreas-247/openclaw-jev-router#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/axeon-at/openclaw-jev-router.git"
+    "url": "git+https://github.com/andreas-247/openclaw-jev-router.git"
   },
   "bugs": {
-    "url": "https://github.com/axeon-at/openclaw-jev-router/issues"
+    "url": "https://github.com/andreas-247/openclaw-jev-router/issues"
   },
   "engines": {
     "node": ">=22.13.0"

@@ -1,4 +1,4 @@
-# Axeon JEV Router
+# OpenClaw JEV Router for Codex
 
 Model-only routing for OpenClaw, powered by TypeSafe JEV. Choose a model per
 interactive turn without asking the main assistant to classify its own workload.
@@ -21,6 +21,13 @@ OpenAI or TypeSafe product.
 
 **It does not route thinking effort.** Your host/session thinking settings remain
 in effect. It does not provision model access or guarantee quota/cost savings.
+
+## Supported models and providers
+
+This release is **Codex/OpenAI-only**, not a provider-agnostic router. Routing is
+restricted to OpenClaw's `openai` provider and configurable `gpt-*` model IDs.
+Anthropic/Claude, Gemini, local models and other providers are not supported.
+Only the default Luna/Sol/Astra setup has received live delivery verification.
 
 ## Requirements
 
@@ -45,13 +52,13 @@ OFF makes no classifier call. See [SECURITY.md](SECURITY.md).
 Once the ClawHub release is public:
 
 ```bash
-openclaw plugins install clawhub:@axeon-at/openclaw-jev-router
+openclaw plugins install clawhub:@andreas-247/openclaw-jev-router
 ```
 
 Alternatively, clone this repository and install locally:
 
 ```bash
-git clone https://github.com/axeon-at/openclaw-jev-router.git
+git clone https://github.com/andreas-247/openclaw-jev-router.git
 cd openclaw-jev-router
 npm test
 openclaw plugins install --link .
@@ -160,4 +167,4 @@ required. Preserve unrelated config and retain private state only if desired.
 
 ## License
 
-[MIT](LICENSE), copyright 2026 Axeon.
+[MIT](LICENSE), copyright 2026 Andreas (andreas-247).

@@ -5,7 +5,7 @@ import { evaluate } from './jev.mjs';
 import { openStore } from './state.mjs';
 
 export function createPlugin(makeStore = openStore) { return {
-  id: 'jarvis-codex-router', name: 'Jarvis JEV Model Router',
+  id: 'jarvis-codex-router', name: 'OpenClaw JEV Router for Codex',
   register(api) {
     const settingsPath = api.pluginConfig?.settingsPath ?? new URL('./settings.json', import.meta.url);
     const settings = async () => validateSettings(JSON.parse(await readFile(settingsPath, 'utf8')));
