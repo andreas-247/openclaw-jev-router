@@ -1,0 +1,25 @@
+{
+  "id": "jarvis-codex-router",
+  "name": "Axeon JEV Router",
+  "description": "Owner-controlled per-chat JEV model routing; no thinking overrides or dispatch takeover",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true,
+    "onCommands": [
+      "autoroute"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "settingsPath": {
+        "type": "string"
+      }
+    }
+  },
+  "version": "0.2.3",
+  "categories": [
+    "developer-tools"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "name": "@axeon-at/openclaw-jev-router",
+  "version": "0.2.3",
+  "private": false,
+  "type": "module",
+  "description": "JEV model-only routing for OpenClaw; host thinking and delivery unchanged",
+  "openclaw": {
+    "extensions": [
+      "./index.mjs"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.9.9"
+    },
+    "build": {
+      "openclawVersion": "2026.9.9"
+    }
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=10000 test/*.test.mjs",
+    "preview": "node cli.mjs"
+  },
+  "license": "MIT",
+  "author": "Axeon",
+  "homepage": "https://github.com/axeon-at/openclaw-jev-router#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/axeon-at/openclaw-jev-router.git"
+  },
+  "bugs": {
+    "url": "https://github.com/axeon-at/openclaw-jev-router/issues"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "keywords": [
+    "openclaw",
+    "jev",
+    "model-routing",
+    "codex"
+  ],
+  "files": [
+    "index.mjs",
+    "jev.mjs",
+    "policy.mjs",
+    "state.mjs",
+    "cli.mjs",
+    "settings.json",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "test/"
+  ]
+}
