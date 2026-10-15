@@ -40,5 +40,7 @@
     "webchat",
     "telegram"
   ],
-  "continuityTtlMs": 7200000
+  "continuityTtlMs": 7200000,
+  "autoDisableOnQuota": false,
+  "quotaCooldownMs": 0
 }

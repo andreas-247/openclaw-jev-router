@@ -1,6 +1,6 @@
 {
   "name": "@andreas-247/openclaw-jev-router",
-  "version": "0.2.4",
+  "version": "0.2.6",
   "private": false,
   "type": "module",
   "description": "JEV model-only routing for OpenClaw Codex/OpenAI models; host thinking and delivery unchanged",

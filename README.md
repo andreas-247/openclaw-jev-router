@@ -15,7 +15,7 @@ OpenAI or TypeSafe product.
 - Routes simple/routine tasks to Luna, standard/complex work to Sol, and exceptional
   tasks to Astra by default. Cases and model names are editable.
 - Combines JEV probability across categories mapped to the same model.
-- Preserves native locks, host fallback decisions, delivery and thinking settings.
+- Preserves native locks, delivery and thinking settings; the host controls fallback eligibility.
 - Persists chat controls and bounded route observations in private SQLite storage.
 - Classifies once per initial run; never automatically replays an agent task.
 
@@ -130,7 +130,8 @@ Use an external persistent copy to preserve customization across package updates
 - `allowedChannels`: default `["webchat", "telegram"]`. WebChat was live-tested;
   other channels need local acceptance testing. Jobs/subagent and known internal
   inputs are excluded. The stock hook does not guarantee full ingress provenance.
-- `defaultMode`: off unless you explicitly change it; prefer per-chat activation.
+- `defaultMode`: off unless explicitly changed. Default-active applies to WebChat;
+  other channels still require an explicit per-chat owner grant. Per-chat OFF wins.
 - `respectManualOverrides`: false by default, so active routing owns ordinary model
   pins. Set true to preserve them. Native model locks always win.
 - `minConfidence`: 0.65 at model-group level; cross-model uncertainty, ties,
@@ -168,3 +169,23 @@ required. Preserve unrelated config and retain private state only if desired.
 ## License
 
 [MIT](LICENSE), copyright 2026 Andreas (andreas-247).
+
+## Quota exhaustion and host fallbacks
+
+Some OpenClaw versions disable configured fallbacks when a plugin overrides the
+model. The router cannot recover or replay the currently failing turn.
+
+Set `autoDisableOnQuota: true` in your persistent settings to suspend active
+routing for that chat after a definitive usage-limit/quota failure. Default is
+`false`; generic HTTP 429/rate-limit errors do not trigger suspension. Only failed
+routed agent runs qualify, not tool errors, shadow runs, or unrelated fallbacks.
+Subsequent turns request no override, allowing the host default and its configured
+fallback policy to operate. This does not guarantee host fallback success.
+
+`quotaCooldownMs` defaults to `0` (manual `/autoroute on` required), and accepts up
+to 30 days in milliseconds. A positive value restores the prior activation mode
+on the first selection/status check after expiry, not at a guaranteed quota reset.
+Manual ON/OFF/shadow takes precedence over cooldown or delayed run errors.
+`/autoroute status` reports quota suspension and its optional expiry. No error
+text is stored or sent to JEV. This is availability recovery, not stronger-model
+escalation or a correctness guarantee.

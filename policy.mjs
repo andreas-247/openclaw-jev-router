@@ -3,6 +3,9 @@ export function validateSettings(s) {
   for (const [key, min, max] of [['timeoutMs', 100, 10000], ['maxInputChars', 1, 20000], ['continuityTtlMs', 0, 21600000]]) {
     if (!Number.isInteger(s[key]) || s[key] < min || s[key] > max) throw Error(`Invalid ${key}`);
   }
+  s = { autoDisableOnQuota: false, quotaCooldownMs: 0, ...s };
+  if (typeof s.autoDisableOnQuota !== 'boolean') throw Error('Invalid autoDisableOnQuota');
+  if (!Number.isSafeInteger(s.quotaCooldownMs) || s.quotaCooldownMs < 0 || s.quotaCooldownMs > 2592000000) throw Error('Invalid quotaCooldownMs');
   if (typeof s.respectManualOverrides !== 'boolean') throw Error('Invalid override policy');
   if (!Number.isFinite(s.minConfidence) || s.minConfidence < 0 || s.minConfidence > 1) throw Error('Invalid confidence');
   if (typeof s.instructions !== 'string' || !s.instructions) throw Error('Missing instructions');
@@ -67,9 +70,17 @@ export function skipReason(event, ctx, mode, settings, entry, control) {
   if (ctx.trigger !== 'user' || ctx.jobId || entry?.spawnedBy) return 'not-interactive';
   const channel = ctx.channel ?? ctx.messageProvider;
   if (!settings.allowedChannels.includes(channel)) return 'channel-excluded';
-  // WebChat may omit senderId on model hooks. An owner-scoped command grants
-  // routing for this exact agent/chat, not a fabricated sender identity.
-  if (!ctx.senderId && !(channel === 'webchat' && control?.ownerEnabled === true && control.channel === channel)) return 'no-channel-sender';
+  // A settings-level defaultMode of active is an explicit owner configuration,
+  // but live delivery verification covers WebChat only. Other allowed channels
+  // still need an explicit per-chat owner grant (e.g. Telegram group messages
+  // from other people must not reach the external classifier by default).
+  if (settings.defaultMode === 'active' && !control?.ownerEnabled && channel !== 'webchat') return 'default-outside-verified-channel';
+  // WebChat may omit senderId on model hooks. No-sender turns are accepted only
+  // with an owner-granted chat or the explicit settings-level active default;
+  // this grants routing for this exact agent/chat, not a fabricated identity.
+  const webchatGrant = channel === 'webchat' &&
+    (settings.defaultMode === 'active' || (control?.ownerEnabled === true && control.channel === channel));
+  if (!ctx.senderId && !webchatGrant) return 'no-channel-sender';
   const kind = event.inputProvenance?.kind ?? ctx.inputProvenance?.kind;
   if (kind && kind !== 'external_user') return 'internal-provenance';
   if (ctx.modelProviderId !== 'openai') return 'not-codex-provider';
@@ -89,6 +100,15 @@ export function continuityState(previous, settings, now) {
 export const isShortContinuation = text => /^\s*(?:continue|go on|carry on|proceed|weiter|mach weiter|fortfahren)[.!]?\s*$/iu.test(text);
 export function isCapabilityFailure(error) {
   const text = typeof error === 'string' ? error : '';
+  if (isQuotaFailure(error)) return false;
   if (/permission|authoriz|denied|quota|rate.?limit|429|network|timeout|ECONN|unavailable/iu.test(text)) return false;
   return /invalid (?:tool )?(?:arguments?|parameters?)|schema validation|structured.output|malformed (?:json|arguments?)/iu.test(text);
+}
+
+// A bare HTTP 429/rate-limit is transient, not evidence of exhausted subscription quota.
+export function isQuotaFailure(error) {
+  const values = typeof error === 'string' ? [error] : error && typeof error === 'object'
+    ? [error.code, error.type, error.message, error.error?.code, error.error?.type, error.error?.message] : [];
+  return values.some(value => typeof value === 'string' &&
+    /\b(?:insufficient_quota|usage_limit_reached|quota_exceeded)\b|\b(?:usage|subscription|weekly|monthly|daily) limit (?:has been |is )?(?:reached|exceeded)|\b(?:exceeded|reached|hit) (?:your |the )?(?:usage|subscription|weekly|monthly|daily) limit|\bquota (?:has been |is )?(?:exhausted|exceeded)\b/i.test(value));
 }

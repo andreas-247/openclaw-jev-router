@@ -25,3 +25,10 @@ candidate. A classifier confidence score is not a guarantee of answer correctnes
 Native model locks always win. Ordinary model pins may be overridden in active
 mode unless respectManualOverrides is enabled. Thinking is never changed.
 Default routing mode is off. Enabling the plugin does not activate every chat.
+
+Optional `autoDisableOnQuota` suspends a chat after a definitive failed routed
+run. It stores only reason/timestamps and previous control metadata, never error
+text. Generic transient rate limits and tool errors cannot suspend routing.
+It does not rescue the failed turn or replay actions. Subsequent turns use host
+selection and fallback policy; availability and correctness are not guaranteed.
+Cooldown is optional and manual controls always take precedence.

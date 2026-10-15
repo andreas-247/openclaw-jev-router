@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { validateSettings, skipReason, continuityState, isShortContinuation, isCapabilityFailure, routeFor } from './policy.mjs';
+import { validateSettings, skipReason, continuityState, isShortContinuation, isCapabilityFailure, isQuotaFailure, routeFor } from './policy.mjs';
 import { evaluate } from './jev.mjs';
 import { openStore } from './state.mjs';
 
@@ -22,6 +22,34 @@ export function createPlugin(makeStore = openStore) { return {
       writes.set(key, promise);
       return promise.finally(() => { if (writes.get(key) === promise) writes.delete(key); });
     };
+    const readControl = ctx => serial(controlKey(ctx), async () => {
+      const key = controlKey(ctx), control = await controls.lookup(key);
+      if (!control?.autoDisabled || !control.reEnableAt || control.reEnableAt > Date.now()) return control;
+      const restored = control.resumeControl ?? { mode: control.resumeMode };
+      await controls.register(key, restored);
+      epochs.set(key, Symbol());
+      log({ event: 'quota-cooldown-expired' });
+      return restored;
+    });
+    const disableOnQuota = async (event, ctx) => {
+      if (event.success !== false || !isQuotaFailure(event.error) || !ctx.sessionKey || !ctx.sessionId || !ctx.runId) return;
+      const s = await settings();
+      if (!s.autoDisableOnQuota) return;
+      await serial(controlKey(ctx), async () => {
+        const row = await routes.lookup(routeKey(ctx)), control = await controls.lookup(controlKey(ctx));
+        // Only a routed, current run may suspend its own unchanged control.
+        // Tool errors are not provider quota evidence; shadow/skipped runs cannot suspend.
+        if (row?.runId !== ctx.runId || row.mode !== 'active' || row.settledAt || !row.route
+          || (row.observedModel && row.observedModel !== `openai/${row.route.model}`)
+          || row.controlSnapshot !== hash(control ?? null) || control?.autoDisabled) return;
+        const now = Date.now();
+        await controls.register(controlKey(ctx), { mode: 'off', autoDisabled: true,
+          autoDisabledAt: now, autoDisabledReason: 'quota', resumeControl: control,
+          resumeMode: s.defaultMode, ...(s.quotaCooldownMs ? { reEnableAt: now + s.quotaCooldownMs } : {}) });
+        epochs.set(controlKey(ctx), Symbol());
+        log({ event: 'auto-disabled', reason: 'quota', ...(s.quotaCooldownMs ? { reEnableAt: now + s.quotaCooldownMs } : {}) });
+      });
+    };
     const update = async (ctx, mutate) => {
       if (!ctx.sessionKey || !ctx.sessionId || !ctx.runId) return;
       const key = routeKey(ctx);
@@ -41,14 +69,14 @@ export function createPlugin(makeStore = openStore) { return {
             const mode = action === 'on' ? 'active' : action;
             epochs.set(controlKey(ctx), Symbol());
             if (epochs.size > 1000) epochs.delete(epochs.keys().next().value);
-            await controls.register(controlKey(ctx), { mode, ownerEnabled: true, channel: ctx.channel }, { assertCurrent: ctx.assertOwnerCurrent });
+            await serial(controlKey(ctx), () => controls.register(controlKey(ctx), { mode, ownerEnabled: true, channel: ctx.channel, revision: randomUUID() }, { assertCurrent: ctx.assertOwnerCurrent }));
             return { text: `Automatic model routing ${mode === 'active' ? 'ON' : mode.toUpperCase()} for this chat. Thinking settings, native locks and host fallbacks are unchanged. No runtime patch is needed.` };
           }
           if (action === 'settings') return { text: Object.entries(s.cases).map(([id, c]) => `${id}: openai/${c.model}\n${c.description}`).join('\n\n') + '\n\nThinking: host-controlled, never changed by this plugin.' };
           if (action !== 'status') return { text: 'Usage: /autoroute on | off | shadow | status | settings' };
-          const control = await controls.lookup(controlKey(ctx));
+          const control = await readControl(ctx);
           const last = ctx.sessionId ? await routes.lookup(routeKey(ctx)) : undefined;
-          return { text: `Automatic model routing: ${control?.mode ?? s.defaultMode} (this chat)\nThinking: unchanged (host settings)\nJEV key: ${process.env.TYPESAFE_API_KEY ? 'available' : 'missing'}\n${last?.skipReason ? `Last turn skipped: ${last.skipReason}` : last ? `Selected: openai/${last.route.model} (${last.route.reason})\nObserved: ${last.observedModel ?? 'not reported'}\nEvidence: ${last.status}${last.observedThinking ? ` · reported thinking ${last.observedThinking}` : ''}` : 'No decision recorded.'}\nPatch: not required.` };
+          return { text: `Automatic model routing: ${control?.mode ?? s.defaultMode} (this chat)${control?.autoDisabled ? ` — auto-disabled: quota${control.reEnableAt ? ` (until ${new Date(control.reEnableAt).toISOString()})` : "; manual /autoroute on required"}` : ""}\nThinking: unchanged (host settings)\nJEV key: ${process.env.TYPESAFE_API_KEY ? 'available' : 'missing'}\n${last?.skipReason ? `Last turn skipped: ${last.skipReason}` : last ? `Selected: openai/${last.route.model} (${last.route.reason})\nObserved: ${last.observedModel ?? 'not reported'}\nEvidence: ${last.status}${last.observedThinking ? ` · reported thinking ${last.observedThinking}` : ''}` : 'No decision recorded.'}\nPatch: not required.` };
         } catch { return { text: 'Routing settings/state unavailable; normal host selections are preserved.' }; }
       } });
     api.on('before_model_resolve', async (event, ctx) => {
@@ -61,7 +89,7 @@ export function createPlugin(makeStore = openStore) { return {
       if (runs.size >= 2000) { api.logger.warn('[codex-router] run-cache-full; preserving host candidate'); return; }
       runs.set(runKey, Date.now());
       try {
-        const s = await settings(), control = await controls.lookup(controlKey(ctx)), mode = control?.mode ?? s.defaultMode;
+        const s = await settings(), control = await readControl(ctx), mode = control?.mode ?? s.defaultMode;
         if (mode === 'off') return;
         const entry = await api.runtime.agent.session.getSessionEntry({ agentId: ctx.agentId, sessionKey: ctx.sessionKey, readConsistency: 'latest' });
         const skip = skipReason(event, ctx, mode, s, entry, control);
@@ -82,9 +110,9 @@ export function createPlugin(makeStore = openStore) { return {
         const current = () => epoch(ctx) === revision && owners.get(key) === owner;
         if (!current()) return;
         const latest = await controls.lookup(controlKey(ctx));
-        if (!current() || (latest?.mode ?? s.defaultMode) !== mode) return;
+        if (!current() || (latest?.mode ?? s.defaultMode) !== mode || hash(latest ?? null) !== hash(control ?? null)) return;
         await serial(key, () => routes.register(key, { case: route.case, route, runId: ctx.runId, mode,
-          status: mode === 'active' ? 'override-requested' : 'recommended', capabilityFailures: 0 },
+          status: mode === 'active' ? 'override-requested' : 'recommended', controlSnapshot: hash(control ?? null), capabilityFailures: 0 },
           { assertCurrent: () => { if (!current()) throw Error('stale route'); } }));
         if (!current()) return;
         log({ event: 'selected', mode, runId: ctx.runId, case: route.case, model: route.model, reason: route.reason, modelConfidence: route.confidence, caseConfidence: route.caseConfidence });
@@ -113,7 +141,8 @@ export function createPlugin(makeStore = openStore) { return {
       }); } catch { api.logger.warn('[codex-router] failure-observation-unavailable'); }
     });
     api.on('agent_end', async (event, ctx) => {
-      try { await update({ ...ctx, runId: event.runId ?? ctx.runId }, row => row.settledAt ? row :
+      try { await disableOnQuota(event, { ...ctx, runId: event.runId ?? ctx.runId });
+        await update({ ...ctx, runId: event.runId ?? ctx.runId }, row => row.settledAt ? row :
         { ...row, settledAt: Date.now(), success: event.success }); }
       catch { api.logger.warn('[codex-router] outcome-state-unavailable'); }
     });

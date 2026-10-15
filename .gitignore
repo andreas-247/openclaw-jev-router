@@ -5,3 +5,12 @@ reports/
 .env.*
 *.sqlite*
 *.log
+
+# Private operational artifacts are not source, even in the dev repository.
+backups/
+logs/
+state/
+publication-validation*/
+config-proposal.json
+*.pem
+*.key

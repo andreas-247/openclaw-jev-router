@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.6 — Quota suspension and configurable defaults
+
+- Opt-in per-chat auto-disable after definitive routed-run quota exhaustion.
+- Optional cooldown restores previous activation; manual controls take precedence.
+- Ignore transient 429s, tool errors, shadow runs and stale/changed controls.
+- Status displays quota suspension; no failed-turn replay or fallback guarantee.
+- Include 0.2.5 default-active WebChat support; public default remains OFF.
+- Keep host fallback limitations explicit.
+
 ## 0.2.4 — Public naming clarification
 
 - Publish under the personal GitHub account andreas-247.

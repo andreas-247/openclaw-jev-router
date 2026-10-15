@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { validateSettings, buildRequest, parseDecision, skipReason, continuityState, isCapabilityFailure } from '../policy.mjs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { validateSettings, buildRequest, parseDecision, skipReason, continuityState, isCapabilityFailure, isQuotaFailure } from '../policy.mjs';
 import { evaluate } from '../jev.mjs';
 import { createPlugin } from '../index.mjs';
 
-const settings = validateSettings(JSON.parse(await readFile(new URL('../settings.json', import.meta.url), 'utf8')));
+const settings = validateSettings({ ...JSON.parse(await readFile(new URL('../settings.json', import.meta.url), 'utf8')), defaultMode: 'off' });
 const result = (choice = 'simple', confidence = 0.99) => ({ answers: { route: { type: 'choice', choice, confidence,
   probabilities: Object.fromEntries([...Object.keys(settings.cases), 'inherit'].map(k => [k, k === choice ? 1 : 0])) } } });
 const event = { prompt: 'Hello' };
@@ -78,9 +81,11 @@ test('timeout aborts JEV and falls back; long text is not transmitted', async ()
   assert.equal(oversized.reason, 'input-exceeds-limit');
 });
 
-function harness(existingStores) {
+function harness(existingStores, s = settings) {
   const hooks = {}, commands = {}, stores = existingStores ?? new Map(), logs = [];
-  const api = { pluginConfig: {}, logger: { info: x => logs.push(x), warn: x => logs.push(x) },
+  const cfgDir = mkdtempSync(join(tmpdir(), 'router-cfg-'));
+  writeFileSync(join(cfgDir, 'settings.json'), JSON.stringify(s));
+  const api = { pluginConfig: { settingsPath: join(cfgDir, 'settings.json') }, logger: { info: x => logs.push(x), warn: x => logs.push(x) },
     runtime: { agent: { session: { getSessionEntry: async () => ({}) } }, state: { openKeyedStore: opts => {
       if (!stores.has(opts.namespace)) stores.set(opts.namespace, new Map());
       const db = stores.get(opts.namespace);
@@ -237,4 +242,91 @@ test('cross-model uncertainty, malformed distributions and model ties remain con
   assert.equal(parseDecision(r,{...settings,minConfidence:0.5}).reason,'low-confidence');
   r.answers.route.probabilities.simple = -0.1;
   assert.equal(parseDecision(r,settings).reason,'invalid-jev-distribution');
+});
+
+const defaultActive = validateSettings({ ...settings, defaultMode: 'active' });
+test('settings default active routes owner-less webchat turns; telegram needs explicit grant; per-chat off wins', async t => {
+  const noSender = { ...ctx, senderId: undefined };
+  assert.equal(skipReason(event, noSender, 'active', defaultActive, {}, undefined), undefined);
+  const tg = { ...ctx, channel: 'telegram' };
+  assert.equal(skipReason(event, tg, 'active', defaultActive, {}, undefined), 'default-outside-verified-channel');
+  assert.equal(skipReason(event, tg, 'active', defaultActive, {}, { ownerEnabled: true, channel: 'telegram' }), undefined);
+  assert.equal(skipReason(event, noSender, 'off', defaultActive, {}, { mode: 'off' }), 'disabled');
+  const h = harness(undefined, defaultActive); let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return response(result()); });
+  const old = process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY = 'synthetic';
+  t.after(() => { if (old === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = old; });
+  assert.deepEqual(await h.hooks.before_model_resolve(event, noSender), { providerOverride: 'openai', modelOverride: 'gpt-6-luna' });
+  await h.hooks.llm_output({ runId: ctx.runId, provider: 'openai', model: 'gpt-6-luna' }, noSender);
+  const status = (await h.commands.autoroute.handler({ ...h.owner, args: 'status' })).text;
+  assert.match(status, /Automatic model routing: active/); assert.match(status, /Observed: openai\/gpt-6-luna/);
+  // The settings-level default is chat-agnostic: every webchat chat routes until
+  // that chat explicitly turns routing off.
+  assert.deepEqual(await h.hooks.before_model_resolve(event, { ...noSender, sessionKey: 'other-chat', runId: 'other-run' }), { providerOverride: 'openai', modelOverride: 'gpt-6-luna' });
+  assert.equal(calls, 2);
+  await h.commands.autoroute.handler({ ...h.owner, args: 'off' });
+  assert.equal(await h.hooks.before_model_resolve(event, { ...noSender, runId: 'post-off' }), undefined);
+  assert.equal(calls, 2);
+});
+
+
+test('quota detector is definitive and settings remain backward-compatible', () => {
+  for (const e of ['You have reached your usage limit', "You've hit your usage limit", 'Usage limit reached', 'quota exceeded', {code:'insufficient_quota'}, {error:{code:'usage_limit_reached'}}]) assert.equal(isQuotaFailure(e), true);
+  for (const e of ['rate limit exceeded', '429 Too Many Requests', 'network timeout', 'permission denied', 'invalid arguments', undefined, {status:429}]) assert.equal(isQuotaFailure(e), false);
+  const legacy = {...settings}; delete legacy.autoDisableOnQuota; delete legacy.quotaCooldownMs;
+  assert.equal(validateSettings(legacy).autoDisableOnQuota, false);
+  for (const patch of [{autoDisableOnQuota:'true'},{quotaCooldownMs:-1},{quotaCooldownMs:Infinity}]) assert.throws(()=>validateSettings({...settings,...patch}));
+});
+
+test('quota auto-off is persistent, per-chat, opt-in and preserves subsequent host candidates', async t => {
+  t.mock.method(globalThis, 'fetch', async () => response(result()));
+  const oldKey = process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY = 'synthetic';
+  t.after(() => { if (oldKey === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = oldKey; });
+  const h = harness(undefined, {...settings, defaultMode:'active', autoDisableOnQuota:true});
+  await h.hooks.before_model_resolve(event, ctx);
+  await h.hooks.agent_end({success:false,error:'usage limit reached'},ctx);
+  const status = (await h.commands.autoroute.handler({...h.owner,args:'status'})).text;
+  assert.match(status,/off .*auto-disabled: quota/);
+  const recreated = harness(h.stores,{...settings,defaultMode:'active',autoDisableOnQuota:true});
+  assert.equal(await recreated.hooks.before_model_resolve(event,{...ctx,runId:'next'}),undefined);
+  assert.equal(await recreated.hooks.before_model_resolve(event,{...ctx,runId:'fallback',modelProviderId:'openrouter'}),undefined);
+  assert.ok(await recreated.hooks.before_model_resolve(event,{...ctx,sessionKey:'other',runId:'other'}));
+  await recreated.commands.autoroute.handler({...h.owner,args:'on'});
+  assert.doesNotMatch((await recreated.commands.autoroute.handler({...h.owner,args:'status'})).text,/auto-disabled/);
+  assert.ok(await recreated.hooks.before_model_resolve(event,{...ctx,runId:'manual-on'}));
+});
+
+test('transient, tool, shadow, disabled-feature, stale-run and changed-control errors cannot suspend routing', async t => {
+  t.mock.method(globalThis, 'fetch', async () => response(result()));
+  const oldKey = process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY = 'synthetic';
+  t.after(() => { if (oldKey === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = oldKey; });
+  for (const kind of ['transient','tool','shadow','opt-out','stale','manual-on','manual-off','success','fallback']) {
+    const h = harness(undefined,{...settings,autoDisableOnQuota:kind!=='opt-out'});
+    await h.commands.autoroute.handler({...h.owner,args:kind==='shadow'?'shadow':'on'});
+    await h.hooks.before_model_resolve(event,ctx);
+    if (kind==='manual-on' || kind==='manual-off') await h.commands.autoroute.handler({...h.owner,args:kind==='manual-on'?'on':'off'});
+    if (kind==='fallback') await h.hooks.llm_input({provider:'openrouter',model:'other'},ctx);
+    if (kind==='tool') await h.hooks.after_tool_call({error:'quota exceeded',toolCallId:'x'},ctx);
+    else await h.hooks.agent_end({success:kind==='success',error:kind==='transient'?'429 rate limit exceeded':'quota exceeded'},kind==='stale'?{...ctx,runId:'old'}:ctx);
+    assert.doesNotMatch((await h.commands.autoroute.handler({...h.owner,args:'status'})).text,/auto-disabled/,kind);
+  }
+});
+
+test('cooldown restores explicit activation even with default off, without overriding manual off', async t => {
+  t.mock.method(globalThis, 'fetch', async () => response(result()));
+  const oldKey = process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY = 'synthetic';
+  t.after(() => { if (oldKey === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = oldKey; });
+  let now = Date.now(); t.mock.method(Date,'now',()=>now);
+  const h = harness(undefined,{...settings,autoDisableOnQuota:true,quotaCooldownMs:1000});
+  await h.commands.autoroute.handler({...h.owner,args:'on'});
+  await h.hooks.before_model_resolve(event,ctx);
+  await h.hooks.agent_end({success:false,error:'quota exceeded'},ctx);
+  assert.match((await h.commands.autoroute.handler({...h.owner,args:'status'})).text,/until/);
+  assert.equal(await h.hooks.before_model_resolve(event,{...ctx,runId:'before-expiry'}),undefined);
+  now+=1001;
+  assert.ok(await h.hooks.before_model_resolve(event,{...ctx,runId:'expired'}));
+  await h.hooks.agent_end({success:false,error:'quota exceeded'},{...ctx,runId:'expired'});
+  await h.commands.autoroute.handler({...h.owner,args:'off'});
+  now+=1001;
+  assert.equal(await h.hooks.before_model_resolve(event,{...ctx,runId:'manual-off'}),undefined);
 });
