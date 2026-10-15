@@ -91,7 +91,13 @@ export function createPlugin(makeStore = openStore) { return {
       try {
         const s = await settings(), control = await readControl(ctx), mode = control?.mode ?? s.defaultMode;
         if (mode === 'off') return;
-        const entry = await api.runtime.agent.session.getSessionEntry({ agentId: ctx.agentId, sessionKey: ctx.sessionKey, readConsistency: 'latest' });
+        const session = api.runtime.agent.session;
+        // Async reader is upstream but absent from released hosts through 2026.10.3.
+        // Keep the documented legacy reader only for those hosts; never retry a
+        // failed async read through it, or route without checking native locks.
+        const readEntry = typeof session.getSessionEntryAsync === 'function'
+          ? session.getSessionEntryAsync : session.getSessionEntry;
+        const entry = await readEntry.call(session, { agentId: ctx.agentId, sessionKey: ctx.sessionKey, readConsistency: 'latest' });
         const skip = skipReason(event, ctx, mode, s, entry, control);
         if (skip) {
           await serial(routeKey(ctx), () => routes.register(routeKey(ctx), { runId: ctx.runId, status: 'skipped', skipReason: skip }));

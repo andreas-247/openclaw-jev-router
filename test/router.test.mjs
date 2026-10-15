@@ -86,7 +86,7 @@ function harness(existingStores, s = settings) {
   const cfgDir = mkdtempSync(join(tmpdir(), 'router-cfg-'));
   writeFileSync(join(cfgDir, 'settings.json'), JSON.stringify(s));
   const api = { pluginConfig: { settingsPath: join(cfgDir, 'settings.json') }, logger: { info: x => logs.push(x), warn: x => logs.push(x) },
-    runtime: { agent: { session: { getSessionEntry: async () => ({}) } }, state: { openKeyedStore: opts => {
+    runtime: { agent: { session: { getSessionEntryAsync: async () => ({}), getSessionEntry: () => { throw Error("unexpected legacy read"); } } }, state: { openKeyedStore: opts => {
       if (!stores.has(opts.namespace)) stores.set(opts.namespace, new Map());
       const db = stores.get(opts.namespace);
       return { lookup: async key => db.get(key), register: async (key, value, options) => {
@@ -95,7 +95,7 @@ function harness(existingStores, s = settings) {
     } } }, on: (name, fn) => hooks[name] = fn, registerCommand: spec => commands[spec.name] = spec };
   createPlugin(api.runtime.state.openKeyedStore).register(api);
   const owner = { ...ctx, senderIsOwner: true, assertOwnerCurrent() {} };
-  return { hooks, commands, stores, logs, owner };
+  return { hooks, commands, stores, logs, owner, session: api.runtime.agent.session };
 }
 test('owner command toggles chat only, persists through registration, and off avoids JEV', async t => {
   const h = harness(); let calls = 0;
@@ -329,4 +329,45 @@ test('cooldown restores explicit activation even with default off, without overr
   await h.commands.autoroute.handler({...h.owner,args:'off'});
   now+=1001;
   assert.equal(await h.hooks.before_model_resolve(event,{...ctx,runId:'manual-off'}),undefined);
+});
+
+
+test('prefers async session reader, awaits native locks and never calls legacy reader', async () => {
+  const h = harness();
+  await h.commands.autoroute.handler({ ...h.owner, args: 'on' });
+  let calls = 0;
+  h.session.getSessionEntry = () => { throw Error('legacy reader must not run'); };
+  h.session.getSessionEntryAsync = async function (params) {
+    assert.equal(this, h.session);
+    assert.deepEqual(params, { agentId: ctx.agentId, sessionKey: ctx.sessionKey, readConsistency: 'latest' });
+    await new Promise(resolve => setImmediate(resolve));
+    calls++;
+    return { modelSelectionLocked: true };
+  };
+  assert.equal(await h.hooks.before_model_resolve(event, ctx), undefined);
+  assert.equal(calls, 1);
+  assert.match((await h.commands.autoroute.handler({ ...h.owner, args: 'status' })).text, /locked-model/);
+});
+
+test('async reader failures preserve host candidate without legacy retry or classification', async t => {
+  const h = harness();
+  await h.commands.autoroute.handler({ ...h.owner, args: 'on' });
+  h.session.getSessionEntryAsync = async () => { throw Error('read failed'); };
+  h.session.getSessionEntry = () => { assert.fail('must not retry legacy'); };
+  t.mock.method(globalThis, 'fetch', () => { assert.fail('must not classify'); });
+  assert.equal(await h.hooks.before_model_resolve(event, ctx), undefined);
+  assert.ok(h.logs.some(line => line.includes('preserving host candidate')));
+});
+
+test('released-host synchronous reader retains native lock protection', async () => {
+  const h = harness();
+  delete h.session.getSessionEntryAsync;
+  await h.commands.autoroute.handler({ ...h.owner, args: 'on' });
+  h.session.getSessionEntry = function (params) {
+    assert.equal(this, h.session);
+    assert.equal(params.readConsistency, 'latest');
+    return { modelSelectionLocked: true };
+  };
+  assert.equal(await h.hooks.before_model_resolve(event, ctx), undefined);
+  assert.match((await h.commands.autoroute.handler({ ...h.owner, args: 'status' })).text, /locked-model/);
 });

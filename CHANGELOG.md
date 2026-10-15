@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.7 — Async session reader migration
+
+- Prefer the supported upstream `getSessionEntryAsync` API when available.
+- Retain the legacy reader for released hosts through OpenClaw 2026.10.3.
+- Failed async reads preserve host selection without legacy retries or classification.
+- Regression coverage for async native locks, read failures and synchronous compatibility.
+
 ## 0.2.6 — Quota suspension and configurable defaults
 
 - Opt-in per-chat auto-disable after definitive routed-run quota exhaustion.

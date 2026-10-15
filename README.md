@@ -146,6 +146,15 @@ to `~/.openclaw/plugin-state/jarvis-codex-router/router.sqlite`. Prompts, answer
 and API keys are not persisted by this plugin. State/control keys are hashed;
 route logs can include run identifiers.
 
+## Session-reader compatibility
+
+The router prefers `api.runtime.agent.session.getSessionEntryAsync` when the host
+provides it. Released hosts through OpenClaw 2026.10.3 expose only the legacy
+reader, which remains a compatibility fallback. Static inspectors may still flag
+that fallback as deprecated; this release does not claim all deprecation warnings
+are removed. A failed async read preserves host selection without retrying the
+legacy reader. Native model locks remain checked on both paths.
+
 ## Development and verification
 
 No build step or runtime dependencies are required.
